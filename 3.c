@@ -13,6 +13,11 @@ char matches[1024][128];
 int matches_len = 0;
 int matches_cnt[1024] = {0};
 int print = 0;
+char type[8] = "ALL";
+
+int pkt_cnt = 0;
+int pkt_size = 0;
+int p_pkt = 0;
 
 #define MAC_ADDRSTRLEN 18
 
@@ -43,14 +48,25 @@ int main(int argc, const char *argv[])
 {
 	char errbuf[PCAP_ERRBUF_SIZE];
 	char *device = NULL;
+	int c = 0;
 
 	for (int i = 0; i < argc; i++)
 	{
 		if (strcmp(argv[i], "-p") == 0)
 			print = 1;
+		if (strcmp(argv[i], "-type") == 0)
+		{
+			strcpy(type, argv[i + 1]);
+		}
+		if (strcmp(argv[i], "-count") == 0)
+			p_pkt = 1;
+		if (strcmp(argv[i], "-c") == 0)
+		{
+			c = atoi(argv[i + 1]);
+		}
 	}
 
-	if (argc == 3 && strcmp("-r", argv[1]) == 0)
+	if (argc > 2 && strcmp("-r", argv[1]) == 0)
 	{
 		pcap_t *handle = NULL;
 
@@ -62,13 +78,15 @@ int main(int argc, const char *argv[])
 		} //end if
 
 		//start capture pcap_dispatch()
-		pcap_loop(handle, 0, pcap_callback2, NULL);
+		pcap_loop(handle, c, pcap_callback2, NULL);
 
 		//free
 		pcap_close(handle);
 	}
 	else
 	{
+		if (!c)
+			c = 10;
 		device = pcap_lookupdev(errbuf);
 		if (!device)
 		{
@@ -88,7 +106,7 @@ int main(int argc, const char *argv[])
 		} //end if
 
 		//start capture pcap_loop()
-		if (0 > pcap_loop(handle, 10, pcap_callback2, NULL))
+		if (0 > pcap_loop(handle, c, pcap_callback2, NULL))
 		{
 			fprintf(stderr, "pcap_loop(): %s\n", pcap_geterr(handle));
 		} //end if
@@ -97,6 +115,12 @@ int main(int argc, const char *argv[])
 	for (int i = 0; i < matches_len; i++)
 	{
 		printf("%s : %d times\n", matches[i], matches_cnt[i]);
+	}
+
+	if (p_pkt)
+	{
+		printf("\ntotal packet : %d\n", pkt_cnt);
+		printf("total packet size : %d\n", pkt_size);
 	}
 
 	return 0;
@@ -108,7 +132,8 @@ static void pcap_callback2(u_char *arg, const struct pcap_pkthdr *header, const 
 	struct ether_header *ethernet = (struct ether_header *)content;
 
 	printf("No. %3d\n", ++d);
-
+	pkt_cnt++;
+	pkt_size += header->len;
 	//format timestamp
 	struct tm *ltime;
 	char timestr[30];
@@ -138,79 +163,103 @@ static void pcap_callback2(u_char *arg, const struct pcap_pkthdr *header, const 
 	switch (ntohs(ethernet->ether_type))
 	{
 	case ETHERTYPE_ARP:
-		printf("ether_type :\tARP\n\n");
+		if (strcmp(type, "ALL"))
+		{
+			printf("ether_type :\tARP\n\n");
+		}
 		break;
 
 	case ETHERTYPE_REVARP:
-		printf("ether_type :\tRARP\n\n");
+		if (strcmp(type, "ALL"))
+		{
+			printf("ether_type :\tRARP\n\n");
+		}
 		break;
 
 	case ETHERTYPE_IPV6:
-		printf("ether_type :\tIPv6\n\n");
+		if (strcmp(type, "ALL"))
+		{
+			printf("ether_type :\tIPv6\n\n");
+		}
 		break;
 
 	case ETHERTYPE_IP:
 	{
-		printf("ether_type :\tIPv4\n");
-		struct ip *ip = (struct ip *)(content + ETHER_HDR_LEN);
-		char tmp[128], src[64];
-		int cnt;
-		memset(tmp, '\0', sizeof(tmp));
-		strcpy(src, inet_ntoa(ip->ip_src));
-		sprintf(tmp, "%s -> %s", src, inet_ntoa(ip->ip_dst));
-		printf("%s\n", tmp);
-		if ((cnt = find_match(tmp)) != matches_len)
+		if (strcmp(type, "ALL") == 0 || strcmp(type, "TCP") == 0 || strcmp(type, "UDP") == 0)
 		{
-			matches_cnt[cnt]++;
-		}
-		else
-		{
-			matches_len++;
-			strcpy(matches[cnt], tmp);
-			matches_cnt[cnt]++;
-		}
-		switch (ip->ip_p)
-		{
-		case IPPROTO_UDP:
-		{
-			struct udphdr *udp = (struct udphdr *)(content + ETHER_HDR_LEN + (ip->ip_hl << 2));
-			u_int16_t len = ntohs(udp->uh_ulen);
-			u_int16_t checksum = ntohs(udp->uh_sum);
+			printf("ether_type :\tIPv4\n");
+			struct ip *ip = (struct ip *)(content + ETHER_HDR_LEN);
+			char tmp[128], src[64];
+			int cnt;
+			memset(tmp, '\0', sizeof(tmp));
+			strcpy(src, inet_ntoa(ip->ip_src));
+			sprintf(tmp, "%s -> %s", src, inet_ntoa(ip->ip_dst));
+			printf("%s\n", tmp);
+			if ((cnt = find_match(tmp)) != matches_len)
+			{
+				matches_cnt[cnt]++;
+			}
+			else
+			{
+				matches_len++;
+				strcpy(matches[cnt], tmp);
+				matches_cnt[cnt]++;
+			}
+			switch (ip->ip_p)
+			{
+			case IPPROTO_UDP:
+			{
+				if (strcmp(type, "UDP") == 0 || strcmp(type, "ALL") == 0)
+				{
+					struct udphdr *udp = (struct udphdr *)(content + ETHER_HDR_LEN + (ip->ip_hl << 2));
+					u_int16_t len = ntohs(udp->uh_ulen);
+					u_int16_t checksum = ntohs(udp->uh_sum);
 
-			printf("protocol :\tUDP\n");
-			// printf("%s\t%d -> %d\n\n", tmp, ntohs(udp->uh_sport), ntohs(udp->uh_dport));
-			printf("+-------------------------+-------------------------+\n");
-			printf("| Source Port:       %5u| Destination Port:  %5u|\n", ntohs(udp->uh_sport), ntohs(udp->uh_dport));
-			printf("+-------------------------+-------------------------+\n");
-			printf("| Length:            %5u| Checksum:          %5u|\n", len, checksum);
-			printf("+-------------------------+-------------------------+\n\n");
-			break;
-		}
-		case IPPROTO_TCP:
-		{
-			struct tcphdr *tcp = (struct tcphdr *)(content + ETHER_HDR_LEN + (ip->ip_hl << 2));
-			u_int8_t header_len = tcp->th_off << 2;
-			u_int8_t flags = tcp->th_flags;
-			u_int16_t window = ntohs(tcp->th_win);
-			u_int16_t checksum = ntohs(tcp->th_sum);
-			u_int16_t urgent = ntohs(tcp->th_urp);
+					printf("protocol :\tUDP\n");
+					// printf("%s\t%d -> %d\n\n", tmp, ntohs(udp->uh_sport), ntohs(udp->uh_dport));
+					printf("+-------------------------+-------------------------+\n");
+					printf("| Source Port:       %5u| Destination Port:  %5u|\n", ntohs(udp->uh_sport), ntohs(udp->uh_dport));
+					printf("+-------------------------+-------------------------+\n");
+					printf("| Length:            %5u| Checksum:          %5u|\n", len, checksum);
+					printf("+-------------------------+-------------------------+\n\n");
+					break;
+				}
+			}
+			case IPPROTO_TCP:
+			{
+				if (strcmp(type, "TCP") == 0 || strcmp(type, "ALL") == 0)
+				{
+					struct tcphdr *tcp = (struct tcphdr *)(content + ETHER_HDR_LEN + (ip->ip_hl << 2));
+					u_int8_t header_len = tcp->th_off << 2;
+					u_int8_t flags = tcp->th_flags;
+					u_int16_t window = ntohs(tcp->th_win);
+					u_int16_t checksum = ntohs(tcp->th_sum);
+					u_int16_t urgent = ntohs(tcp->th_urp);
 
-			printf("protocol :\tTCP\n");
-			printf("+-------------------------+------------------------+\n");
-			printf("| Source Port:       %5u| Destination Port:  %5u|\n", ntohs(tcp->th_sport), ntohs(tcp->th_dport));
-			printf("+-------------------------+-------------------------+\n");
-			printf("| Checksum:          %5u                          |\n", checksum);
-			printf("+---------------------------------------------------+\n\n");
+					printf("protocol :\tTCP\n");
+					printf("+-------------------------+------------------------+\n");
+					printf("| Source Port:       %5u| Destination Port:  %5u|\n", ntohs(tcp->th_sport), ntohs(tcp->th_dport));
+					printf("+-------------------------+-------------------------+\n");
+					printf("| Checksum:          %5u                          |\n", checksum);
+					printf("+---------------------------------------------------+\n\n");
+					break;
+				}
+			}
+			case IPPROTO_ICMP:
+				if (strcmp(type, "ALL") == 0)
+				{
+					printf("protocol :\tICMP\n\n");
+				}
+				break;
+			default:
+				if (strcmp(type, "ALL") == 0)
+				{
+					printf("protocol :\t%d\n\n", ip->ip_p);
+				}
+				break;
+			}
 			break;
 		}
-		case IPPROTO_ICMP:
-			printf("protocol :\tICMP\n\n");
-			break;
-		default:
-			printf("protocol :\t%d\n\n", ip->ip_p);
-			break;
-		}
-		break;
 	}
 
 	default:
